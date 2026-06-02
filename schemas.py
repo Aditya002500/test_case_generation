@@ -29,10 +29,16 @@ class TestPlan(BaseModel):
 
 
 class TestCase(BaseModel):
+    id: str = ""
+    student_id: int = 0
     category: str
     input: Any
     expected: Optional[Any] = None
+    expected_oracle: Optional[Any] = None
     explanation: str
+    oracle_match: Optional[bool] = None
+    oracle_error: Optional[str] = None
+    discrimination_score: Optional[float] = None
 
 
 class TestCaseList(BaseModel):
@@ -56,3 +62,4 @@ class FinalReport(BaseModel):
     plan: TestPlan
     suites: List[StudentTestSuite]
     feedback: FeedbackSignal
+    meta: Dict[str, Any] = Field(default_factory=dict)
