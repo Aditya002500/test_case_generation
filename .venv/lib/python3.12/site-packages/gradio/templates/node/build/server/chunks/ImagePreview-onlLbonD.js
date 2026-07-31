@@ -1,0 +1,9 @@
+import { O as c } from './2-Errc8o6K.js';
+import { g, y, z as ze, H, B as Be, _, v, a as R, F as Fe } from './src3-Q7Y3eLw7.js';
+import { t } from './Image-Cuxe3CuX.js';
+import { d as attr_class, h as bind_props } from './async-Byizi1M7.js';
+
+function f(f,p){f.component(f=>{let{value:m,label:h=void 0,show_label:g$1,buttons:_$1=[],on_custom_button_click:v$1=null,selectable:y$1=false,i18n:b,display_icon_button_wrapper_top_corner:x=false,fullscreen:S=false,show_button_background:C=true,onselect:w,onfullscreen:T,onshare:E,onerror:D,onload:O}=p;g(f,{show_label:g$1,Icon:H,label:g$1?h||b(`image.image`):``}),f.push(`<!----> `),m==null||!m?.url?(f.push(`<!--[-->`),y(f,{unpadded_box:true,size:`large`,children:e=>{H(e);},$$slots:{default:true}})):(f.push(`<!--[!-->`),f.push(`<div class="image-container svelte-12vrxzd">`),ze(f,{display_top_corner:x,show_background:C,buttons:_$1,on_custom_button_click:v$1,children:t=>{_$1.some(e=>typeof e==`string`&&e===`fullscreen`)?(t.push(`<!--[-->`),Be(t,{fullscreen:S,onclick:e=>{S=e,T?.(e);}})):t.push(`<!--[!-->`),t.push(`<!--]--> `),_$1.some(e=>typeof e==`string`&&e===`download`)?(t.push(`<!--[-->`),_(t,{href:m.url,download:m.orig_name||`image`,children:e=>{v(e,{Icon:R,label:b(`common.download`)});},$$slots:{default:true}})):t.push(`<!--[!-->`),t.push(`<!--]--> `),_$1.some(e=>typeof e==`string`&&e===`share`)?(t.push(`<!--[-->`),Fe(t,{i18n:b,onshare:e=>E?.(e),onerror:e=>D?.(e),formatter:async t=>t?`<img src="${await c(t)}" />`:``,value:m})):t.push(`<!--[!-->`),t.push(`<!--]-->`);}}),f.push(`<!----> <button class="svelte-12vrxzd"><div${attr_class(`image-frame svelte-12vrxzd`,void 0,{selectable:y$1})}>`),t(f,{src:m.url,restProps:{loading:`lazy`,alt:``},onload:O}),f.push(`<!----></div></button></div>`)),f.push(`<!--]-->`),bind_props(p,{fullscreen:S});});}
+
+export { f };
+//# sourceMappingURL=ImagePreview-onlLbonD.js.map

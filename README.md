@@ -10,7 +10,7 @@ A naïve LLM-in-the-loop test generator is a thin prompt over a chat model:
 it is fast to build, but the LLM is both the *input synthesizer* and the
 *answer key*, so errors compound, categories are mis-applied, and "boundary
 case" gets defined by vibes. SpecTest-LLM introduces four measurable
-mechanisms on top of the same Gemini backbone:
+mechanisms on top of the same Groq (`openai/gpt-oss-120b`) backbone:
 
 1. **Dual-Oracle verification.** When a reference implementation is
    provided, each generated input is executed in a sandboxed subprocess
@@ -71,7 +71,7 @@ decides whether to refine.
 | `discrimination.py` | Adversarial impl templates and per-case discrimination scoring.            |
 | `metrics.py`        | `PipelineMetrics` aggregation, summary line, dictionary round-trip.       |
 | `schemas.py`        | Pydantic models: data contract between every stage.                      |
-| `llms.py`           | `ChatGoogleGenerativeAI` factory; loads `GEMINI_API_KEY`.                |
+| `llms.py`           | `ChatOpenAI` factory (Groq OpenAI-compatible endpoint); loads `GROQ_CLOUD_API_KEY`. |
 
 ## Quickstart
 
@@ -79,7 +79,7 @@ decides whether to refine.
 python -m venv .chain-env
 source .chain-env/bin/activate
 pip install -r requirements.txt
-cp .env.example .env   # then put your Gemini key in .env
+cp .env.example .env   # then put your Groq Cloud key in .env
 python app.py          # http://localhost:7860
 ```
 
@@ -118,7 +118,8 @@ aggregation. Tests run without LLM calls.
 
 ## Security
 
-Never commit `.env`. The free Gemini tier is limited to 20 requests/day
-per project; budget accordingly when running the experiments. Oracle
+Never commit `.env`. Groq Cloud enforces per-model rate limits (requests
+and tokens per minute/day) on the free tier; budget accordingly when
+running the experiments and watch for HTTP 429 responses. Oracle
 subprocesses are sandboxed with rlimits (256 MB address space, 5s CPU)
 and a 1.5s wall-clock timeout.

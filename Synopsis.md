@@ -64,8 +64,8 @@ Scope of the current implementation:
 - Accepts a problem statement and optional code in a Gradio web interface.
 - Supports a defined set of languages (python, cpp, java, javascript, go,
   other) for input metadata.
-- Generates a structured test plan and concrete test cases using Gemini-based
-  models via LangChain.
+- Generates a structured test plan and concrete test cases using Groq-hosted
+  models (`openai/gpt-oss-120b`) via LangChain over an OpenAI-compatible API.
 - Enforces a fixed set of test categories and per-category counts.
 - Produces an HTML view and JSON report for downstream use.
 
@@ -73,8 +73,8 @@ Key assumptions in this synopsis:
 
 - The user provides a clear and complete problem statement.
 - The optional code is used for analysis only and is not executed.
-- An API key for Gemini models is available via the environment variable
-  GEMINI_API_KEY.
+- An API key for Groq Cloud is available via the environment variable
+  GROQ_CLOUD_API_KEY.
 - The system runs as a local service with no database and no external
   persistence layer.
 
@@ -356,7 +356,7 @@ complete pipeline. The design emphasizes modularity and explicit data flow.
 - graph.py defines the LangGraph pipeline and output processing logic.
 - agents.py defines LLM prompts and parsers for each role.
 - schemas.py defines Pydantic models that structure all data.
-- llms.py configures Gemini model access via environment variables.
+- llms.py configures Groq model access via environment variables.
 
 \pagebreak
 
@@ -366,7 +366,7 @@ complete pipeline. The design emphasizes modularity and explicit data flow.
 flowchart LR
     User[User or Instructor] --> UI[Gradio UI]
     UI --> Pipeline[LangGraph Pipeline]
-    Pipeline --> LLMs[Gemini LLMs]
+    Pipeline --> LLMs[Groq LLMs]
     Pipeline --> Report[FinalReport JSON]
     Report --> UI
     UI --> Viewer[HTML Test Case View]
@@ -518,8 +518,9 @@ graph.py
 
 llms.py
 
-- Loads GEMINI_API_KEY from the environment.
-- Instantiates ChatGoogleGenerativeAI models with specified temperatures.
+- Loads GROQ_CLOUD_API_KEY from the environment.
+- Instantiates ChatOpenAI models (pointed at Groq's OpenAI-compatible
+  endpoint) with specified temperatures.
 
 schemas.py
 
@@ -567,7 +568,7 @@ data structures suitable for evaluation.
 
 ### 5.8 Configuration and Runtime Considerations
 
-- The system requires GEMINI_API_KEY in the environment.
+- The system requires GROQ_CLOUD_API_KEY in the environment.
 - The service is launched via Gradio on 0.0.0.0:7860.
 - No persistent storage is used; all outputs are generated per request.
 - The UI provides copy-to-clipboard functionality using browser APIs.
@@ -588,7 +589,7 @@ flowchart TB
         Browser --> Gradio
         Gradio --> Pipeline
     end
-    Pipeline --> Gemini[Gemini API]
+    Pipeline --> Groq[Groq Cloud API]
 ```
 
 The deployment is simple: a single Gradio server and a local pipeline process
@@ -752,8 +753,8 @@ Pipeline Requirements (graph.py and agents.py)
 
 Model Integration Requirements (llms.py)
 
-1. Instantiate Gemini-based LLMs with configured temperature per role.
-2. Fail fast when GEMINI_API_KEY is not set.
+1. Instantiate Groq-hosted LLMs with configured temperature per role.
+2. Fail fast when GROQ_CLOUD_API_KEY is not set.
 
 Data Contract Requirements (schemas.py)
 
@@ -916,7 +917,7 @@ Key runtime dependencies as listed in requirements.txt:
 
 - langgraph
 - langchain
-- langchain-google-genai
+- langchain-openai
 - pydantic
 - python-dotenv
 - gradio

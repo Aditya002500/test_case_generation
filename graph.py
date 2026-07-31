@@ -430,7 +430,7 @@ def _detect_oracle_entry(code: str) -> str:
 
 
 def node_spec(state: GraphState) -> Dict[str, Any]:
-    llm = build_llm("gemini-3-flash-preview", temperature=0.2)
+    llm = build_llm(temperature=0.2)
     prompt, parser = build_spec_agent(llm)
     chain = prompt | llm | parser
     spec = _retry_invoke(
@@ -450,7 +450,7 @@ def node_spec(state: GraphState) -> Dict[str, Any]:
 def node_analysis(state: GraphState) -> Dict[str, Any]:
     if not state.get("code", "").strip():
         return {"analysis": CodeAnalysis(), "oracle_entry": ""}
-    llm = build_llm("gemini-2.5-flash", temperature=0.2)
+    llm = build_llm(temperature=0.2)
     prompt, parser = build_code_analysis_agent(llm)
     chain = prompt | llm | parser
     analysis = _retry_invoke(
@@ -467,7 +467,7 @@ def node_analysis(state: GraphState) -> Dict[str, Any]:
 
 def node_spec_graph(state: GraphState) -> Dict[str, Any]:
     """Typed coverage model that drives both the plan and the generator's prompts."""
-    llm = build_llm("gemini-3.1-flash-lite-preview", temperature=0.1)
+    llm = build_llm(temperature=0.1)
     prompt = build_spec_graph_agent(llm) | llm
     raw = ""
     try:
@@ -499,7 +499,7 @@ def node_start(state: GraphState) -> Dict[str, Any]:
 
 
 def node_plan(state: GraphState) -> Dict[str, Any]:
-    llm = build_llm("gemini-3.1-flash-lite-preview", temperature=0.3)
+    llm = build_llm(temperature=0.3)
     prompt, parser = build_test_plan_agent(llm)
     chain = prompt | llm | parser
     per_category = max(2, min(3, state.get("per_category", 2)))
@@ -693,7 +693,7 @@ def _detect_student_count(state: GraphState) -> int:
 
 
 def node_generate(state: GraphState) -> Dict[str, Any]:
-    llm = build_llm("gemini-2.5-flash-lite", temperature=0.5)
+    llm = build_llm(temperature=0.5)
     prompt, parser = build_test_generator_agent(llm)
     chain = prompt | llm
     suites: List[StudentTestSuite] = []
@@ -883,7 +883,7 @@ def node_metrics(state: GraphState) -> Dict[str, Any]:
 
 
 def node_feedback(state: GraphState) -> Dict[str, Any]:
-    llm = build_llm("gemini-3-flash-preview", temperature=0.2)
+    llm = build_llm(temperature=0.2)
     prompt, parser = build_feedback_agent(llm)
     chain = prompt | llm | parser
     issues = state.get("issues", [])

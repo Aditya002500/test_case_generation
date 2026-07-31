@@ -321,7 +321,7 @@ def _run_pipeline_safe(
             '<div class="error-box">'
             '<div class="error-title">Pipeline failed</div>'
             f'<div class="error-msg">{escape(str(exc))}</div>'
-            '<div class="error-hint">Check that GEMINI_API_KEY is set and the '
+            '<div class="error-hint">Check that GROQ_CLOUD_API_KEY is set and the '
             "problem statement is non-empty.</div></div></div>"
         )
         return err_html, json.dumps(err_payload, indent=2)
@@ -735,6 +735,11 @@ EXAMPLES = [
 
 with gr.Blocks(
     title="SpecTest-LLM",
+    theme=gr.themes.Soft(
+        primary_hue="indigo", secondary_hue="violet", neutral_hue="slate"
+    ),
+    css=CUSTOM_CSS,
+    js=CUSTOM_JS,
 ) as demo:
     gr.Markdown(
         "# SpecTest-LLM",
@@ -742,7 +747,8 @@ with gr.Blocks(
     )
     gr.Markdown(
         "Generate explainable, multi-category test cases for programming "
-        "problems using a multi-agent LangGraph pipeline powered by Gemini.",
+        "problems using a multi-agent LangGraph pipeline powered by Groq "
+        "(openai/gpt-oss-120b).",
         elem_id="subtitle",
     )
 
@@ -871,12 +877,7 @@ with gr.Blocks(
         if not all_text:
             return gr.update(value="Nothing to copy yet.", visible=True)
         return gr.update(
-            value=(
-                "<script>navigator.clipboard.writeText("
-                + json.dumps(all_text)
-                + ");</script>"
-                "All test cases copied to clipboard."
-            ),
+            value="All test cases copied to clipboard.",
             visible=True,
         )
 
@@ -909,7 +910,12 @@ with gr.Blocks(
         outputs=[cases_html, output_json, all_text_state, status],
     )
 
-    copy_all_btn.click(_copy_all, inputs=[all_text_state], outputs=[status])
+    copy_all_btn.click(
+        _copy_all,
+        inputs=[all_text_state],
+        outputs=[status],
+        js="(txt) => { if (txt) { navigator.clipboard.writeText(txt); } return [txt]; }",
+    )
 
     clear_btn.click(
         _clear,
@@ -937,9 +943,4 @@ if __name__ == "__main__":
         server_port=7860,
         ssr_mode=False,
         show_error=True,
-        theme=gr.themes.Soft(
-            primary_hue="indigo", secondary_hue="violet", neutral_hue="slate"
-        ),
-        css=CUSTOM_CSS,
-        js=CUSTOM_JS,
     )
