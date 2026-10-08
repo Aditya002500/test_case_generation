@@ -19,12 +19,15 @@ from agents import (
 )
 from discrimination import DiscriminationScore, low_discrimination_cases, score_suite
 from diversity import (
+
     categories_needing_resample,
     fingerprint,
     intra_category_diversity,
 )
+from judge import evaluate_test_suite_with_judge
 from llms import build_llm
 from metrics import PipelineMetrics, build_metrics, metrics_summary_line
+from mutation import MutationResult, compute_mutation_score, surviving_mutant_hints
 from oracle import run_python_oracle
 from schemas import (
     CodeAnalysis,
@@ -45,8 +48,8 @@ from spec_graph import (
 logger = logging.getLogger(__name__)
 
 MAX_REFINES = 1
-LLM_RETRIES = 2
-LLM_RETRY_BACKOFF = 2.0
+LLM_RETRIES = 3
+LLM_RETRY_BACKOFF = 3.0
 DIVERSITY_THRESHOLD = 0.35
 DISCRIMINATION_THRESHOLD = 0.3
 ORACLE_TIMEOUT_S = 1.5
@@ -69,6 +72,8 @@ class GraphState(TypedDict, total=False):
     suites: List[StudentTestSuite]
     feedback: FeedbackSignal
     metrics: PipelineMetrics
+    mutation_result: MutationResult
+    mutation_hints: List[str]
     issues: List[str]
     oracle_entry: str
     oracle_call_style: str
@@ -126,7 +131,16 @@ def _retry_invoke(chain: Callable, payload: Dict[str, Any], *, label: str) -> An
             last_error = exc
             logger.warning("LLM call %s failed (attempt %s): %s", label, attempt, exc)
             if attempt <= LLM_RETRIES:
-                time.sleep(LLM_RETRY_BACKOFF * attempt)
+                wait_time = LLM_RETRY_BACKOFF * attempt
+                msg = str(exc)
+                if "429" in msg or "Rate limit" in msg:
+                    m = re.search(r"try again in ([0-9.]+)s", msg)
+                    if m:
+                        wait_time = max(wait_time, float(m.group(1)) + 1.0)
+                    else:
+                        wait_time = max(wait_time, 5.0 * attempt)
+                logger.info("Backing off for %.2fs before retrying %s...", wait_time, label)
+                time.sleep(wait_time)
     assert last_error is not None
     raise last_error
 
@@ -359,23 +373,67 @@ def _normalize_pythonish(text: str) -> str:
 
 
 def _parse_case_list(raw_text: str) -> TestCaseList:
-    cleaned = _strip_markdown(raw_text)
-    rewritten = _rewrite_repeat_calls(cleaned)
-    repaired = _replace_string_expressions(rewritten)
-    blob = _extract_json_blob(repaired)
-    blob = _normalize_pythonish(blob)
+    cleaned = _strip_markdown(raw_text).strip()
+
+    # Strategy 1: Direct JSON parse of cleaned string and blob
+    for candidate in [cleaned, _extract_json_blob(cleaned), _normalize_pythonish(_extract_json_blob(cleaned))]:
+        try:
+            data = json.loads(candidate)
+            if isinstance(data, list):
+                data = {"cases": data}
+            if isinstance(data, dict):
+                cases_raw = data.get("cases", [])
+                if isinstance(cases_raw, list) and cases_raw:
+                    # Validate individually to tolerate single-case imperfections
+                    valid = []
+                    for item in cases_raw:
+                        if isinstance(item, dict):
+                            try:
+                                valid.append(TestCase.model_validate(item))
+                            except Exception:
+                                pass
+                    if valid:
+                        return TestCaseList(cases=valid)
+        except Exception:
+            pass
+
+    # Strategy 2: Rewritten/repaired string expressions
     try:
+        rewritten = _rewrite_repeat_calls(cleaned)
+        repaired = _replace_string_expressions(rewritten)
+        blob = _extract_json_blob(repaired)
+        blob = _normalize_pythonish(blob)
         data = json.loads(blob)
-    except json.JSONDecodeError:
-        return TestCaseList(cases=[])
-    if isinstance(data, list):
-        data = {"cases": data}
-    if not isinstance(data, dict):
-        return TestCaseList(cases=[])
+        if isinstance(data, list):
+            data = {"cases": data}
+        if isinstance(data, dict):
+            cases_raw = data.get("cases", [])
+            valid = []
+            for item in cases_raw:
+                if isinstance(item, dict):
+                    try:
+                        valid.append(TestCase.model_validate(item))
+                    except Exception:
+                        pass
+            if valid:
+                return TestCaseList(cases=valid)
+    except Exception:
+        pass
+
+    # Strategy 3: Regex scan for individual TestCase objects
+    valid_cases = []
     try:
-        return TestCaseList.model_validate(data)
-    except Exception:  # noqa: BLE001
-        return TestCaseList(cases=[])
+        # Match any object with "category" and "expected"
+        for match in re.finditer(r'\{[^{}]*"(?:category|expected)"[^{}]*\}', raw_text):
+            try:
+                item = json.loads(match.group(0))
+                valid_cases.append(TestCase.model_validate(item))
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+    return TestCaseList(cases=valid_cases)
 
 
 def _enforce_targets(
@@ -503,13 +561,17 @@ def node_plan(state: GraphState) -> Dict[str, Any]:
     prompt, parser = build_test_plan_agent(llm)
     chain = prompt | llm | parser
     per_category = max(2, min(3, state.get("per_category", 2)))
+    issues = list(state.get("issues", []))
+    mutation_hints = state.get("mutation_hints", [])
+    if mutation_hints:
+        issues.extend([f"Target surviving mutant: {h}" for h in mutation_hints[:3]])
     plan = _retry_invoke(
         chain,
         {
             "spec": state["spec"].model_dump(),
             "spec_graph": state.get("spec_graph", SpecGraph()).model_dump(),
             "analysis": state["analysis"].model_dump(),
-            "issues": state.get("issues", []),
+            "issues": issues,
             "per_category": per_category,
             "format_instructions": parser.get_format_instructions(),
         },
@@ -840,6 +902,40 @@ def _coverage_pct(spec_graph: SpecGraph, suites: List[StudentTestSuite]) -> floa
     return spec_graph.coverage_pct(cases)
 
 
+def node_mutation(state: GraphState) -> Dict[str, Any]:
+    """Run mutation analysis on the generated test suite.
+
+    This is the novel contribution: generate code mutants from the reference
+    implementation, run each test case against each mutant, and compute the
+    mutation kill rate.  Surviving mutant hints are stored in state so the
+    feedback node can trigger mutation-guided regeneration.
+    """
+    code = state.get("code", "")
+    entry = state.get("oracle_entry", "")
+    spec_graph = state.get("spec_graph") or SpecGraph()
+    if not code or not entry or state.get("language", "python") != "python":
+        return {"mutation_result": None, "mutation_hints": []}
+
+    flat: List[TestCase] = []
+    for s in state.get("suites", []):
+        flat.extend(s.cases)
+    if not flat:
+        return {"mutation_result": None, "mutation_hints": []}
+
+    result = compute_mutation_score(
+        flat,
+        reference_code=code,
+        entry=entry,
+        call_style=spec_graph.call_style,
+    )
+    hints = surviving_mutant_hints(result)
+    logger.info(
+        "mutation analysis: score=%.2f killed=%d/%d survived=%d",
+        result.mutation_score, result.killed, result.total_mutants, result.survived,
+    )
+    return {"mutation_result": result, "mutation_hints": hints}
+
+
 def node_metrics(state: GraphState) -> Dict[str, Any]:
     suites = state.get("suites", [])
     spec_graph = state.get("spec_graph") or SpecGraph()
@@ -871,12 +967,17 @@ def node_metrics(state: GraphState) -> Dict[str, Any]:
             timeout_s=DISCRIMINATION_TIMEOUT_S,
         )
 
+    # Include mutation score in metrics
+    mutation_result = state.get("mutation_result")
+    mutation_score = mutation_result.mutation_score if mutation_result else 0.0
+
     metrics = build_metrics(
         suites,
         coverage_pct=coverage,
         oracle_match_rate=match_rate,
         oracle_mismatches=mismatches,
         discrimination_scores=disc_scores,
+        mutation_score=mutation_score,
     )
     logger.info("pipeline metrics: %s", metrics_summary_line(metrics))
     return {"metrics": metrics}
@@ -886,7 +987,15 @@ def node_feedback(state: GraphState) -> Dict[str, Any]:
     llm = build_llm(temperature=0.2)
     prompt, parser = build_feedback_agent(llm)
     chain = prompt | llm | parser
-    issues = state.get("issues", [])
+    issues = list(state.get("issues", []))
+
+    # Closed-loop mutation-guided feedback
+    mut_result = state.get("mutation_result")
+    mut_hints = state.get("mutation_hints", [])
+    if mut_result and mut_result.mutation_score < 0.70 and mut_hints:
+        for hint in mut_hints[:3]:
+            issues.append(f"Low mutation kill rate ({mut_result.mutation_score*100:.0f}%). Surviving mutant hint: {hint}")
+
     feedback = _retry_invoke(
         chain,
         {
@@ -899,7 +1008,7 @@ def node_feedback(state: GraphState) -> Dict[str, Any]:
     )
     needs_refine = bool(feedback.needs_refine) or bool(issues)
     iteration = state.get("iteration", 0) + (1 if needs_refine else 0)
-    return {"feedback": feedback, "iteration": iteration}
+    return {"feedback": feedback, "issues": issues, "iteration": iteration}
 
 
 def should_refine(state: GraphState) -> str:
@@ -929,19 +1038,19 @@ def build_graph():
     graph.add_node("plan", node_plan)
     graph.add_node("generate", node_generate)
     graph.add_node("discrimination", node_discrimination)
+    graph.add_node("mutation", node_mutation)
     graph.add_node("metrics", node_metrics)
     graph.add_node("feedback", node_feedback)
 
     graph.set_entry_point("start")
     graph.add_edge("start", "spec")
-    graph.add_edge("start", "analysis")
-    graph.add_edge("start", "spec_graph")
-    graph.add_edge("spec", "plan")
-    graph.add_edge("analysis", "plan")
+    graph.add_edge("spec", "analysis")
+    graph.add_edge("analysis", "spec_graph")
     graph.add_edge("spec_graph", "plan")
     graph.add_edge("plan", "generate")
     graph.add_edge("generate", "discrimination")
-    graph.add_edge("discrimination", "metrics")
+    graph.add_edge("discrimination", "mutation")
+    graph.add_edge("mutation", "metrics")
     graph.add_edge("metrics", "feedback")
     graph.add_conditional_edges(
         "feedback",
@@ -975,14 +1084,30 @@ def run_pipeline(
             "issues": issues or [],
         }
     )
+    mutation_result = state.get("mutation_result")
+    suites = state.get("suites", [])
+    flat_cases = [c for s in suites for c in s.cases]
+    judge_eval = None
+    try:
+        judge_eval = evaluate_test_suite_with_judge(
+            problem=problem,
+            constraints=constraints,
+            cases=flat_cases,
+            sample_limit=6,
+        )
+    except Exception as exc:
+        logger.warning("Judge evaluation failed: %s", exc)
+
     return FinalReport(
         spec=state["spec"],
         analysis=state["analysis"],
         plan=state["plan"],
-        suites=state.get("suites", []),
+        suites=suites,
         feedback=state["feedback"],
         meta={
             "spec_graph": state.get("spec_graph", SpecGraph()).model_dump(),
             "metrics": (state.get("metrics").to_dict() if state.get("metrics") else {}),
+            "mutation": (mutation_result.to_dict() if mutation_result else {}),
+            "judge": (judge_eval.model_dump() if judge_eval else {}),
         },
     )

@@ -1,0 +1,112 @@
+{
+  "cases": [
+    {
+      "category": "Basic cases",
+      "input": "A man, a plan, a canal: Panama",
+      "expected": true,
+      "explanation": "Filters to 'amanaplanacanalpanama', which reads the same forwards and backwards."
+    },
+    {
+      "category": "Basic cases",
+      "input": "race a car",
+      "expected": false,
+      "explanation": "Filters to 'raceacar'; reversed is 'racaecar', so it is not a palindrome."
+    },
+    {
+      "category": "Basic cases",
+      "input": "Was it a car or a cat I saw?",
+      "expected": true,
+      "explanation": "Filters to 'wasitacaroracatisaw', which is symmetric."
+    },
+    {
+      "category": "Boundary cases",
+      "input": "",
+      "expected": true,
+      "explanation": "Empty string has no characters to violate symmetry, so it is a palindrome."
+    },
+    {
+      "category": "Boundary cases",
+      "input": "a",
+      "expected": true,
+      "explanation": "Single alphanumeric character (len 1) is trivially a palindrome."
+    },
+    {
+      "category": "Boundary cases",
+      "input": "ab",
+      "expected": false,
+      "explanation": "Shortest possible non-palindrome: 'a' != 'b'."
+    },
+    {
+      "category": "Random cases",
+      "input": "level",
+      "expected": true,
+      "explanation": "Ordinary word that happens to be symmetric."
+    },
+    {
+      "category": "Random cases",
+      "input": "hello",
+      "expected": false,
+      "explanation": "Ordinary word, reversed is 'olleh', not equal."
+    },
+    {
+      "category": "Random cases",
+      "input": "12321",
+      "expected": true,
+      "explanation": "Numeric string that reads the same both ways."
+    },
+    {
+      "category": "Stress cases",
+      "input": "abcdefghijklmnopqrstuvwxyz01234567899876543210zyxwvutsrqponmlkjihgfedcba",
+      "expected": true,
+      "explanation": "72-char string built as LEFT + reverse(LEFT); exercises a long two-pointer scan that must still confirm symmetry."
+    },
+    {
+      "category": "Stress cases",
+      "input": "abcdefghijklmnopqrstuvwxyz0123456789zyxwvutsrqponmlkjihgfedcba1234567890",
+      "expected": false,
+      "explanation": "Long ~71-char string whose halves do not mirror; forces the full scan before returning false."
+    },
+    {
+      "category": "Invalid/robustness cases",
+      "input": " ",
+      "expected": true,
+      "explanation": "Only whitespace; after removing non-alphanumerics nothing remains, which counts as a palindrome."
+    },
+    {
+      "category": "Invalid/robustness cases",
+      "input": ".,!?;:",
+      "expected": true,
+      "explanation": "All punctuation; filters to empty string, so palindrome. Guards against code that indexes an empty filtered buffer."
+    },
+    {
+      "category": "Invalid/robustness cases",
+      "input": "@#$%^&*()",
+      "expected": true,
+      "explanation": "All symbols; filters to empty. Confirms non-alphanumerics are stripped, not compared."
+    },
+    {
+      "category": "Bug-targeted cases",
+      "input": "0P",
+      "expected": false,
+      "explanation": "Classic trap: '0' and 'P' are adjacent in ASCII case-shift logic. Correct answer is false; catches solutions that mishandle digit-vs-letter case folding."
+    },
+    {
+      "category": "Bug-targeted cases",
+      "input": "aA",
+      "expected": true,
+      "explanation": "Case-insensitivity check: 'a' and 'A' must be treated as equal. Catches missing lowercasing."
+    },
+    {
+      "category": "Bug-targeted cases",
+      "input": "ab@a",
+      "expected": true,
+      "explanation": "Non-alphanumeric in the middle must be skipped, not compared. Filters to 'aba'; catches two-pointer skip bugs."
+    },
+    {
+      "category": "Bug-targeted cases",
+      "input": "abca",
+      "expected": false,
+      "explanation": "Off-by-one probe: differs at the outer pair ('a' vs 'a' ok) then 'b' vs 'c' fails. Catches loops that stop one step too early."
+    }
+  ]
+}

@@ -26,6 +26,7 @@ class PipelineMetrics:
     oracle_match_rate: float
     low_discrimination_ids: List[str]
     oracle_mismatches: List[Dict[str, Any]] = field(default_factory=list)
+    mutation_score: float = 0.0
     duration_ms: float = 0.0
 
     def to_dict(self) -> Dict[str, Any]:
@@ -63,6 +64,7 @@ def build_metrics(
     oracle_match_rate: float,
     oracle_mismatches: List[Dict[str, Any]],
     discrimination_scores: List[DiscriminationScore],
+    mutation_score: float = 0.0,
     duration_ms: float = 0.0,
     low_threshold: float = 0.3,
 ) -> PipelineMetrics:
@@ -84,6 +86,7 @@ def build_metrics(
         oracle_match_rate=round(oracle_match_rate, 3),
         low_discrimination_ids=low_ids,
         oracle_mismatches=oracle_mismatches,
+        mutation_score=round(mutation_score, 4),
         duration_ms=round(duration_ms, 1),
     )
 
@@ -96,5 +99,6 @@ def metrics_summary_line(metrics: PipelineMetrics) -> str:
         f"inter_div={metrics.inter_diversity:.2f} "
         f"disc={metrics.discrimination_mean:.2f} "
         f"oracle_match={metrics.oracle_match_rate:.2f} "
-        f"coverage={metrics.coverage_pct:.2f}"
+        f"coverage={metrics.coverage_pct:.2f} "
+        f"mutation_score={metrics.mutation_score:.2f}"
     )

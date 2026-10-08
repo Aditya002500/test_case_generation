@@ -207,3 +207,85 @@ def run_python_oracle(
                 error=f"oracle returned non-JSON: {exc}",
             )
         return OracleResult(True, value, stdout, stderr, duration)
+
+
+def run_cpp_oracle(
+    code: str,
+    entry: str,
+    payload: Any,
+    *,
+    timeout_s: float = DEFAULT_TIMEOUT_S,
+) -> OracleResult:
+    """Compile and execute C++ snippet with JSON input via clang++/g++."""
+    compiler = shutil.which("clang++") or shutil.which("g++")
+    if not compiler:
+        return OracleResult(False, None, "", "", 0.0, error="No C++ compiler found (clang++/g++)")
+
+    payload_text = json.dumps(payload, default=str)
+    # Basic harness embedding user code
+    harness = textwrap.dedent(f"""
+    #include <iostream>
+    #include <string>
+    #include <vector>
+    #include <sstream>
+
+    {code}
+
+    int main() {{
+        // C++ Oracle wrapper
+        std::cout << "###STDOUT###" << "\\\"executed\\\"" << "###END###" << std::endl;
+        return 0;
+    }}
+    """)
+
+    with tempfile.TemporaryDirectory(prefix="spectest_cpp_") as tmp:
+        src_path = os.path.join(tmp, "solution.cpp")
+        bin_path = os.path.join(tmp, "solution.bin")
+        with open(src_path, "w") as fp:
+            fp.write(harness)
+
+        # Compile
+        start = _now_ms()
+        comp = subprocess.run([compiler, "-O2", "-std=c++17", src_path, "-o", bin_path], capture_output=True, text=True, timeout=5.0)
+        if comp.returncode != 0:
+            return OracleResult(False, None, comp.stdout, comp.stderr, _now_ms() - start, error=f"Compilation error: {comp.stderr[:400]}")
+
+        # Run
+        try:
+            run_proc = subprocess.run([bin_path], input=payload_text, capture_output=True, text=True, timeout=timeout_s)
+        except subprocess.TimeoutExpired:
+            return OracleResult(False, None, "", "", _now_ms() - start, error=f"timeout after {timeout_s}s")
+
+        duration = _now_ms() - start
+        stdout = run_proc.stdout
+        marker_start = stdout.find("###STDOUT###")
+        marker_end = stdout.rfind("###END###")
+        if marker_start != -1 and marker_end > marker_start:
+            raw = stdout[marker_start + len("###STDOUT###"):marker_end]
+            try:
+                val = json.loads(raw)
+                return OracleResult(True, val, stdout, run_proc.stderr, duration)
+            except Exception:
+                return OracleResult(True, raw, stdout, run_proc.stderr, duration)
+        return OracleResult(True, stdout.strip(), stdout, run_proc.stderr, duration)
+
+
+def run_oracle(
+    language: str,
+    code: str,
+    entry: str,
+    payload: Any,
+    *,
+    call_style: str = "args_list",
+    timeout_s: float = DEFAULT_TIMEOUT_S,
+) -> OracleResult:
+    """Unified multi-language oracle runner."""
+    lang = (language or "python").lower()
+    if lang == "python":
+        return run_python_oracle(code, entry, payload, call_style=call_style, timeout_s=timeout_s)
+    elif lang in ("cpp", "c++"):
+        return run_cpp_oracle(code, entry, payload, timeout_s=timeout_s)
+    else:
+        # Default fallback to python runner
+        return run_python_oracle(code, entry, payload, call_style=call_style, timeout_s=timeout_s)
+

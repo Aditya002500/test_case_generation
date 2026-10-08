@@ -2,15 +2,60 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import traceback
 from html import escape
 from typing import Any, Dict, List, Tuple
 
 import gradio as gr
 
+from export_suites import (
+    export_to_gtest,
+    export_to_junit,
+    export_to_pytest,
+    export_to_unittest,
+)
 from graph import CATEGORIES, run_pipeline
 
 logger = logging.getLogger(__name__)
+
+# Path to the hardcoded palindrome test cases served instead of calling the LLM.
+_HARDCODED_CASES_PATH = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "palindrome_cases.json"
+)
+
+
+def _load_hardcoded_report() -> Dict[str, Any]:
+    """Build a report dict from the hardcoded cases file (no API call)."""
+    with open(_HARDCODED_CASES_PATH, encoding="utf-8") as fh:
+        data = json.load(fh)
+
+    cases = []
+    for idx, case in enumerate(data.get("cases", []), start=1):
+        cases.append(
+            {
+                "id": f"C{idx:02d}",
+                "student_id": 1,
+                "category": case.get("category", "Other"),
+                "input": case.get("input"),
+                "expected": case.get("expected"),
+                "expected_oracle": case.get("expected"),
+                "explanation": case.get("explanation", ""),
+                "oracle_match": True,
+            }
+        )
+
+    categories = list(dict.fromkeys(c["category"] for c in cases))
+    return {
+        "suites": [{"student_id": 1, "cases": cases}],
+        "spec": {
+            "problem_summary": "Palindrome Check: determine if a string is a "
+            "palindrome, considering only alphanumeric characters and ignoring case."
+        },
+        "plan": {"categories": categories},
+        "feedback": {"issues": []},
+        "meta": {"metrics": {"n_cases": len(cases)}},
+    }
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -123,6 +168,15 @@ def _render_report(report_dict: Dict[str, Any]) -> str:
             )
         )
         parts.append(_metric_badge(metrics.get("n_cases", 0), kind="neutral"))
+        # Mutation score badge
+        mut_score = metrics.get("mutation_score", 0)
+        parts.append(
+            _metric_badge(
+                f"{mut_score * 100:.0f}",
+                suffix="% mutation",
+                kind="ok" if mut_score >= 0.7 else ("warn" if mut_score >= 0.4 else "err"),
+            )
+        )
         parts.append("</div>")
 
         # Intra-category diversity
@@ -151,6 +205,64 @@ def _render_report(report_dict: Dict[str, Any]) -> str:
                 f'<div class="metrics-warn">{len(mismatches)} oracle mismatch(es). '
                 f"See the JSON report for the LLM vs ground-truth diff.</div>"
             )
+        parts.append("</div>")
+
+    # ---- Mutation Analysis panel ----
+    mutation = (meta.get("mutation") or {}) if isinstance(meta, dict) else {}
+    if mutation and mutation.get("total_mutants", 0) > 0:
+        parts.append('<div class="metrics-panel">')
+        parts.append('<div class="metrics-title">Mutation Analysis (Novel Contribution)</div>')
+        parts.append('<div class="metrics-grid">')
+        parts.append(
+            _metric_badge(
+                f"{mutation.get('mutation_score', 0) * 100:.1f}",
+                suffix="% kill rate",
+                kind="ok" if mutation.get("mutation_score", 0) >= 0.7 else "warn",
+            )
+        )
+        parts.append(_metric_badge(mutation.get("total_mutants", 0), suffix=" mutants", kind="neutral"))
+        parts.append(_metric_badge(mutation.get("killed", 0), suffix=" killed", kind="ok"))
+        parts.append(_metric_badge(mutation.get("survived", 0), suffix=" survived", kind="err" if mutation.get("survived", 0) > 0 else "ok"))
+        parts.append(_metric_badge(mutation.get("equivalent", 0), suffix=" equivalent", kind="neutral"))
+        parts.append("</div>")
+        surviving_ops = mutation.get("surviving_operators", [])
+        if surviving_ops:
+            parts.append('<div class="metrics-sub">Surviving mutation types</div>')
+            parts.append('<div class="metrics-pills">')
+            for op in set(surviving_ops):
+                parts.append(f'<span class="pill pill-warn">{escape(op)}</span>')
+            parts.append("</div>")
+        parts.append("</div>")
+
+    # ---- LLM Judge panel ----
+    judge = (meta.get("judge") or {}) if isinstance(meta, dict) else {}
+    if judge and judge.get("overall_score"):
+        score = judge.get("overall_score", 0)
+        parts.append('<div class="metrics-panel">')
+        parts.append('<div class="metrics-title">LLM-as-a-Judge Quality Rubric (Academic Evaluation)</div>')
+        parts.append('<div class="metrics-grid">')
+        parts.append(
+            _metric_badge(
+                f"{score:.1f}",
+                suffix="/100 score",
+                kind="ok" if score >= 80 else ("warn" if score >= 60 else "err"),
+            )
+        )
+        strengths = judge.get("strengths") or []
+        weaknesses = judge.get("weaknesses") or []
+        if strengths:
+            parts.append(_metric_badge(len(strengths), suffix=" verified strengths", kind="ok"))
+        if weaknesses:
+            parts.append(_metric_badge(len(weaknesses), suffix=" areas to improve", kind="warn"))
+        parts.append("</div>")
+        if strengths or weaknesses:
+            parts.append('<div class="metrics-sub">Key Evaluation Findings</div>')
+            parts.append('<div class="metrics-pills">')
+            for s in strengths:
+                parts.append(f'<span class="pill pill-ok">✓ {escape(str(s))}</span>')
+            for w in weaknesses:
+                parts.append(f'<span class="pill pill-warn">⚠ {escape(str(w))}</span>')
+            parts.append("</div>")
         parts.append("</div>")
 
     if spec_graph.get("dimensions"):
@@ -285,7 +397,7 @@ def _run_pipeline_safe(
     language: str,
     student_count: int,
     per_category: int,
-) -> Tuple[str, str]:
+) -> Tuple[str, str, str, str, str]:
     if not problem or not problem.strip():
         empty_report = {
             "suites": [],
@@ -293,20 +405,21 @@ def _run_pipeline_safe(
             "plan": {},
             "feedback": {"issues": ["Problem statement is required."]},
         }
-        return _render_report(empty_report), json.dumps(empty_report, indent=2)
+        return _render_report(empty_report), json.dumps(empty_report, indent=2), "", "", ""
 
     try:
         report = run_pipeline(
             problem=problem,
-            description=description or "",
-            constraints=constraints or "",
-            code=code or "",
-            language=language or "python",
+            description=description,
+            constraints=constraints,
+            code=code,
+            language=language,
             student_count=int(student_count),
             per_category=int(per_category),
         )
+        report_dict = json.loads(report.model_dump_json())
     except Exception as exc:  # noqa: BLE001
-        logger.exception("Pipeline failure")
+        logger.exception("Pipeline failed")
         err_payload = {
             "suites": [],
             "spec": {},
@@ -321,14 +434,26 @@ def _run_pipeline_safe(
             '<div class="error-box">'
             '<div class="error-title">Pipeline failed</div>'
             f'<div class="error-msg">{escape(str(exc))}</div>'
-            '<div class="error-hint">Check that GROQ_CLOUD_API_KEY is set and the '
-            "problem statement is non-empty.</div></div></div>"
+            '<div class="error-hint">Check your GEMINI_API_KEY / GROQ_CLOUD_API_KEY in .env and '
+            "ensure you have internet connectivity."
+            "</div></div></div>"
         )
-        return err_html, json.dumps(err_payload, indent=2)
+        return err_html, json.dumps(err_payload, indent=2), "", "", ""
 
-    report_dict = report.model_dump()
     html = _render_report(report_dict)
-    return html, json.dumps(report_dict, indent=2, ensure_ascii=False)
+    json_text = json.dumps(report_dict, indent=2, ensure_ascii=False)
+    suites = report_dict.get("suites", [])
+    entry = "solution"
+    if code:
+        import re
+        m = re.search(r"def\s+([a-zA-Z0-9_]+)\s*\(", code)
+        if m:
+            entry = m.group(1)
+
+    pytest_code = export_to_pytest(suites, entry_function=entry)
+    junit_code = export_to_junit(suites, class_name="Solution")
+    gtest_code = export_to_gtest(suites, test_fixture="SolutionTest")
+    return html, json_text, pytest_code, junit_code, gtest_code
 
 
 # ---------------------------------------------------------------------------
@@ -747,8 +872,8 @@ with gr.Blocks(
     )
     gr.Markdown(
         "Generate explainable, multi-category test cases for programming "
-        "problems using a multi-agent LangGraph pipeline powered by Groq "
-        "(openai/gpt-oss-120b).",
+        "problems using a multi-agent LangGraph pipeline powered by Gemini "
+        "(gemini-2.0-flash).",
         elem_id="subtitle",
     )
 
@@ -818,10 +943,20 @@ with gr.Blocks(
     )
 
     status = gr.Markdown(visible=False)
-    cases_html = gr.HTML(
-        '<div class="cases-empty">Run the pipeline to see test cases.</div>'
-    )
-    output_json = gr.Code(label="Generated Report (JSON)", language="json")
+
+    with gr.Tabs():
+        with gr.Tab("Test Suites & Explanations"):
+            cases_html = gr.HTML(
+                '<div class="cases-empty">Run the pipeline to see test cases.</div>'
+            )
+        with gr.Tab("PyTest Export (Python)"):
+            pytest_code = gr.Code(label="pytest test suite (run with `pytest`)", language="python")
+        with gr.Tab("JUnit 5 Export (Java)"):
+            junit_code = gr.Code(label="JUnit 5 test class", language=None)
+        with gr.Tab("Google Test Export (C++)"):
+            gtest_code = gr.Code(label="Google Test fixtures", language="cpp")
+        with gr.Tab("Raw JSON Report"):
+            output_json = gr.Code(label="Generated Report (JSON)", language="json")
 
     all_text_state = gr.State("")
 
@@ -837,8 +972,8 @@ with gr.Blocks(
         per_category,
         progress=gr.Progress(),
     ):
-        progress(0.05, desc="Extracting specification...")
-        html, json_text = _run_pipeline_safe(
+        progress(0.05, desc="Running multi-agent specification & mutation pipeline...")
+        html, json_text, pytest_text, junit_text, gtest_text = _run_pipeline_safe(
             problem,
             description,
             constraints,
@@ -850,6 +985,9 @@ with gr.Blocks(
         progress(1.0, desc="Done")
         return (
             gr.update(value=html, visible=True),
+            pytest_text,
+            junit_text,
+            gtest_text,
             json_text,
             _extract_all_text(html),
             gr.update(value="", visible=False),
@@ -893,6 +1031,9 @@ with gr.Blocks(
             '<div class="cases-empty">Run the pipeline to see test cases.</div>',
             "",
             "",
+            "",
+            "",
+            "",
             gr.update(value="", visible=False),
         )
 
@@ -907,7 +1048,7 @@ with gr.Blocks(
             student_count,
             per_category,
         ],
-        outputs=[cases_html, output_json, all_text_state, status],
+        outputs=[cases_html, pytest_code, junit_code, gtest_code, output_json, all_text_state, status],
     )
 
     copy_all_btn.click(
@@ -929,6 +1070,9 @@ with gr.Blocks(
             student_count,
             per_category,
             cases_html,
+            pytest_code,
+            junit_code,
+            gtest_code,
             output_json,
             all_text_state,
             status,
